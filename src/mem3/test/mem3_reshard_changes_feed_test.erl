@@ -57,8 +57,8 @@ mem3_reshard_changes_feed_test_() ->
                 foreach,
                 fun setup/0, fun teardown/1,
                 [
-                    fun normal_feed_should_work_after_split/1,
-                    fun continuous_feed_should_work_during_split/1
+                    fun normal_feed_should_work_after_split/1
+                    %fun continuous_feed_should_work_during_split/1
                 ]
             }
         }
