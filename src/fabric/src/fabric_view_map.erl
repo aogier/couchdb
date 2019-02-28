@@ -30,7 +30,7 @@ go(Db, Options, DDoc, View, Args, Callback, Acc, VInfo) ->
     {CoordArgs, WorkerArgs} = fabric_view:fix_skip_and_limit(Args),
     DocIdAndRev = fabric_util:doc_id_and_rev(DDoc),
     fabric_view:maybe_update_others(DbName, DocIdAndRev, Shards, View, Args),
-    Repls = fabric_view:get_shard_replacements(DbName, Shards),
+    Repls = fabric_ring:get_shard_replacements(DbName, Shards),
     RPCArgs = [DocIdAndRev, View, WorkerArgs, Options],
     StartFun = fun(Shard) ->
         hd(fabric_util:submit_jobs([Shard], fabric_rpc, map_view, RPCArgs))

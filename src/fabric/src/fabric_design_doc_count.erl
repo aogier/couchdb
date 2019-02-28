@@ -44,7 +44,7 @@ handle_message({rexi_DOWN, _, {_,NodeRef},_}, _Shard, {Counters, Acc}) ->
 
 handle_message({rexi_EXIT, Reason}, Shard, {Counters, Acc}) ->
     NewCounters = lists:keydelete(Shard, #shard.ref, Counters),
-    case fabric_view:is_progress_possible(NewCounters) of
+    case fabric_ring:is_progress_possible(NewCounters) of
         true ->
             {ok, {NewCounters, Acc}};
         false ->
@@ -57,7 +57,7 @@ handle_message({ok, Count}, Shard, {Counters, Acc}) ->
             {ok, {Counters, Acc}};
         nil ->
             C1 = fabric_dict:store(Shard, ok, Counters),
-            C2 = fabric_view:remove_overlapping_shards(Shard, C1),
+            C2 = fabric_ring:remove_overlapping_shards(Shard, C1),
             case fabric_dict:any(nil, C2) of
             true ->
                 {ok, {C2, Count+Acc}};

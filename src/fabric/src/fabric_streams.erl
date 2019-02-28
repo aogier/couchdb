@@ -75,7 +75,7 @@ handle_stream_start({rexi_DOWN, _, {_, NodeRef}, _}, _, St) ->
 handle_stream_start({rexi_EXIT, Reason}, Worker, St) ->
     Workers = fabric_dict:erase(Worker, St#stream_acc.workers),
     Replacements = St#stream_acc.replacements,
-    case {fabric_view:is_progress_possible(Workers), Reason} of
+    case {fabric_ring:is_progress_possible(Workers), Reason} of
     {true, _} ->
         {ok, St#stream_acc{workers=Workers}};
     {false, {maintenance_mode, _Node}} when Replacements /= undefined ->
@@ -90,7 +90,7 @@ handle_stream_start({rexi_EXIT, Reason}, Worker, St) ->
                 end, Workers, WorkerReplacements),
                 % Assert that our replaced worker provides us
                 % the oppurtunity to make progress.
-                true = fabric_view:is_progress_possible(FinalWorkers),
+                true = fabric_ring:is_progress_possible(FinalWorkers),
                 NewRefs = fabric_dict:fetch_keys(FinalWorkers),
                 {new_refs, NewRefs, St#stream_acc{
                     workers=FinalWorkers,
@@ -116,7 +116,7 @@ handle_stream_start(rexi_STREAM_INIT, {Worker, From}, St) ->
         % Don't ack the worker yet so they don't start sending us
         % rows until we're ready
         Workers0 = fabric_dict:store(Worker, From, St#stream_acc.workers),
-        Workers1 = fabric_view:remove_overlapping_shards(Worker, Workers0),
+        Workers1 = fabric_ring:remove_overlapping_shards(Worker, Workers0),
         case fabric_dict:any(waiting, Workers1) of
             true ->
                 {ok, St#stream_acc{workers=Workers1}};

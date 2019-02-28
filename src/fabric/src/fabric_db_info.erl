@@ -57,7 +57,7 @@ handle_message({rexi_DOWN,
 
 handle_message({rexi_EXIT, Reason}, Shard, {Counters, PseqAcc, Acc}) ->
     NewCounters = fabric_dict:erase(Shard, Counters),
-    case fabric_view:is_progress_possible(NewCounters) of
+    case fabric_ring:is_progress_possible(NewCounters) of
     true ->
         {ok, {NewCounters, PseqAcc, Acc}};
     false ->
@@ -72,7 +72,7 @@ handle_message({ok, Info}, #shard{dbname=Name} = Shard, {Counters, PseqAcc, Acc}
     nil ->
         Seq = couch_util:get_value(update_seq, Info),
         C1 = fabric_dict:store(Shard, Seq, Counters),
-        C2 = fabric_view:remove_overlapping_shards(Shard, C1),
+        C2 = fabric_ring:remove_overlapping_shards(Shard, C1),
         PSeq = couch_util:get_value(purge_seq, Info),
         NewPseqAcc = [{Shard, PSeq}|PseqAcc],
         case fabric_dict:any(nil, C2) of

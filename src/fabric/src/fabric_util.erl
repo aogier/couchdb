@@ -34,7 +34,7 @@
 remove_down_workers(Workers, BadNode) ->
     Filter = fun(#shard{node = Node}, _) -> Node =/= BadNode end,
     NewWorkers = fabric_dict:filter(Filter, Workers),
-    case fabric_view:is_progress_possible(NewWorkers) of
+    case fabric_ring:is_progress_possible(NewWorkers) of
     true ->
         {ok, NewWorkers};
     false ->

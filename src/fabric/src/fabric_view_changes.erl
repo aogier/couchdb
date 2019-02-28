@@ -150,7 +150,7 @@ send_changes(DbName, ChangesArgs, Callback, PackedSeqs, AccIn, Timeout) ->
     end, Reps1),
     Seqs = WSeqs ++ WSplitSeqs ++ WReps,
     {Workers0, _} = lists:unzip(Seqs),
-    Repls = fabric_view:get_shard_replacements(DbName, Workers0),
+    Repls = fabric_ring:get_shard_replacements(DbName, Workers0),
     StartFun = fun(#shard{name=Name, node=N, range=R0}=Shard) ->
         %% Find the original shard copy in the Seqs array
         case lists:dropwhile(fun({S, _}) -> S#shard.range =/= R0 end, Seqs) of
@@ -449,7 +449,7 @@ do_unpack_seqs(Opaque, DbName) ->
     % This just handles the case if the ring in the unpacked sequence
     % received is not complete and in that case tries to fill in the
     % missing ranges with shards from the shard map
-    case fabric_view:is_progress_possible(Unpacked) of
+    case fabric_ring:is_progress_possible(Unpacked) of
         true ->
             Unpacked;
         false ->
@@ -640,7 +640,7 @@ unpack_seqs_test() ->
     meck:new(mem3),
     meck:new(fabric_view),
     meck:expect(mem3, get_shard, fun(_, _, _) -> {ok, #shard{}} end),
-    meck:expect(fabric_view, is_progress_possible, fun(_) -> true end),
+    meck:expect(fabric_ring, is_progress_possible, fun(_) -> true end),
 
     % BigCouch 0.3 style.
     assert_shards("23423-g1AAAAE7eJzLYWBg4MhgTmHgS0ktM3QwND"

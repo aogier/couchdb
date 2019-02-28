@@ -30,7 +30,7 @@ go(Db, DDoc, VName, Args, Callback, Acc, VInfo) ->
     DocIdAndRev = fabric_util:doc_id_and_rev(DDoc),
     RPCArgs = [DocIdAndRev, VName, WorkerArgs],
     fabric_view:maybe_update_others(DbName, DocIdAndRev, Shards, VName, Args),
-    Repls = fabric_view:get_shard_replacements(DbName, Shards),
+    Repls = fabric_ring:get_shard_replacements(DbName, Shards),
     StartFun = fun(Shard) ->
         hd(fabric_util:submit_jobs([Shard], fabric_rpc, reduce_view, RPCArgs))
     end,
