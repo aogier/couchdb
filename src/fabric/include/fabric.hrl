@@ -36,6 +36,7 @@
 
 -record(stream_acc, {
     workers,
+    ready,
     start_fun,
     replacements
 }).

@@ -12,104 +12,114 @@
 
 -module(fabric_ring).
 
+
 -export([
     is_progress_possible/1,
-    remove_overlapping_shards/2,
-    remove_overlapping_shards/3,
-    get_shard_replacements/2
+    get_shard_replacements/2,
+    worker_exited/3,
+    node_down/3,
+    handle_error/3,
+    handle_response/4
+
 ]).
+
 
 -include_lib("fabric/include/fabric.hrl").
 -include_lib("mem3/include/mem3.hrl").
 
 
+-type fabric_dict() :: [{#shard{}, any()}].
+
 
 %% @doc looks for a fully covered keyrange in the list of counters
--spec is_progress_possible([{#shard{}, term()}]) -> boolean().
+-spec is_progress_possible(fabric_dict()) -> boolean().
 is_progress_possible(Counters) ->
     mem3_util:get_ring(get_worker_ranges(Counters)) =/= [].
 
 
--spec remove_overlapping_shards(#shard{}, [{#shard{}, any()}]) ->
-    [{#shard{}, any()}].
-remove_overlapping_shards(#shard{} = Shard, Counters) ->
-    remove_overlapping_shards(Shard, Counters, fun stop_worker/1).
-
-
--spec remove_overlapping_shards(#shard{}, [{#shard{}, any()}], fun()) ->
-    [{#shard{}, any()}].
-remove_overlapping_shards(#shard{} = Shard, Counters, RemoveCb) ->
-    Counters1 = filter_exact_copies(Shard, Counters, RemoveCb),
-    filter_possible_overlaps(Shard, Counters1, RemoveCb).
-
-
-filter_possible_overlaps(Shard, Counters, RemoveCb) ->
-    Ranges0 = get_worker_ranges(Counters),
-    #shard{range = [BShard, EShard]} = Shard,
-    Ranges = Ranges0 ++ [{BShard, EShard}],
-    {Bs, Es} = lists:unzip(Ranges),
-    {MinB, MaxE} = {lists:min(Bs), lists:max(Es)},
-    % Use a custom sort function which prioritizes the given shard
-    % range when the start endpoints match.
-    SortFun  = fun
-        ({B, E}, {B, _}) when {B, E} =:= {BShard, EShard} ->
-            % If start matches with the shard's start, shard always wins
-            true;
-        ({B, _}, {B, E}) when {B, E} =:= {BShard, EShard} ->
-            % If start matches with te shard's start, shard always wins
-            false;
-        ({B, E1}, {B, E2}) ->
-            % If start matches, pick the longest range first
-            E2 >= E1;
-        ({B1, _}, {B2, _}) ->
-            % Then, by default, sort by start point
-            B1 =< B2
-    end,
-    Ring = mem3_util:get_ring(Ranges, SortFun, MinB, MaxE),
-    fabric_dict:filter(fun
-        (S, _) when S =:= Shard ->
-            % Keep the original shard
-            true;
-        (#shard{range = [B, E]} = S, _) ->
-            case lists:member({B, E}, Ring) of
-                true ->
-                    true; % Keep it
-                false ->
-                    % Duplicate range, delete after calling callback function
-                    case is_function(RemoveCb) of
-                        true -> RemoveCb(S);
-                        false -> ok
-                    end,
-                    false
-            end
-    end, Counters).
-
-
-filter_exact_copies(#shard{range = Range0} = Shard0, Shards, Cb) ->
-    fabric_dict:filter(fun
-        (Shard, _) when Shard =:= Shard0 ->
-            true; % Don't remove ourselves
-        (#shard{range = Range} = Shard, _) when Range =:= Range0 ->
-            case is_function(Cb) of
-                true ->  Cb(Shard);
-                false -> ok
-            end,
-            false;
-        (_, _) ->
-            true
-    end, Shards).
-
-
-stop_worker(#shard{ref = Ref, node = Node}) ->
-    rexi:kill(Node, Ref).
-
-
+-spec get_shard_replacements(binary(), [#shard{}]) -> [#shard{}].
 get_shard_replacements(DbName, UsedShards0) ->
     % We only want to generate a replacements list from shards
     % that aren't already used.
     AllLiveShards = mem3:live_shards(DbName, [node() | nodes()]),
     UsedShards = [S#shard{ref=undefined} || S <- UsedShards0],
     get_shard_replacements_int(AllLiveShards -- UsedShards, UsedShards).
+
+
+-spec worker_exited(#shard{}, fabric_dict(), [{any(), #shard{}, any()}]) ->
+    {ok, fabric_dict()} | error.
+worker_exited(Shard, Workers, Responses) ->
+    Workers1 = fabric_dict:erase(Shard, Workers),
+    case is_progress_possible(Workers1, Responses) of
+        true -> {ok, Workers1};
+        false -> error
+    end.
+
+
+-spec node_down(node(), fabric_dict(), fabric_dict()) ->
+    {ok, fabric_dict()} | error.
+node_down(Node, Workers, Responses) ->
+    Workers1 = fabric_dict:filter(fun(#shard{node = N}, _) ->
+        N =/= Node
+    end, Workers),
+    case is_progress_possible(Workers1, Responses) of
+        true -> {ok, Workers1};
+        false -> error
+    end.
+
+
+-spec handle_error(#shard{}, fabric_dict(), fabric_dict()) ->
+    {ok, fabric_dict()} | error.
+handle_error(Shard, Workers, Responses) ->
+    Workers1 = fabric_dict:erase(Shard, Workers),
+    case is_progress_possible(Workers1, Responses) of
+        true -> {ok, Workers1};
+        false -> error
+    end.
+
+
+-spec handle_response(#shard{}, any(), fabric_dict(), fabric_dict()) ->
+    {ok, {fabric_dict(), fabric_dict()}} | {stop, fabric_dict()}.
+handle_response(Shard, Response, Workers, Responses) ->
+    handle_response(Shard, Response, Workers, Responses, fun stop_worker/1).
+
+
+-spec handle_response(#shard{}, any(), fabric_dict(), fabric_dict(), fun()) ->
+    {ok, {fabric_dict(), fabric_dict()}} | {stop, list()}.
+handle_response(Shard, Response, Workers, Responses, CleanupCb) ->
+    Workers1 = fabric_dict:erase(Shard, Workers),
+    #shard{range = [B, E]} = Shard,
+    Responses1 = [{{B, E}, Shard, Response} | Responses],
+    ResponseRanges = lists:map(fun({R, _, _}) -> R end, Responses1),
+    case mem3_util:get_ring(ResponseRanges) of
+        [] ->
+            {ok, {Workers1, Responses1}};
+        Ring ->
+            % Kill all the remaining workers since we have a full ring
+            lists:foreach(fun({W, _}) ->
+                case is_function(CleanupCb) of
+                    true -> CleanupCb(W);
+                    false -> ok
+                end
+            end, Workers1),
+            % Return one response per range in the ring. The
+            % response list is reversed before sorting so that the
+            % first shard copy to reply is first. We use keysort
+            % because it is documented as being stable so that
+            % we keep the relative order of duplicate shards
+            SortedResponses = lists:keysort(1, lists:reverse(Responses1)),
+            {stop, get_responses(Ring, SortedResponses)}
+    end.
+
+
+% This version combines workers that are still waiting and the ones that have
+% responded already.
+-spec is_progress_possible(fabric_dict(), [{any(), #shard{}, any()}]) ->
+    boolean().
+is_progress_possible(Counters, Responses) ->
+    ResponseRanges = lists:map(fun({{B, E}, _, _}) -> {B, E} end, Responses),
+    mem3_util:get_ring(get_worker_ranges(Counters) ++ ResponseRanges) =/= [].
+
 
 get_shard_replacements_int(UnusedShards, UsedShards) ->
     % If we have more than one copy of a range then we don't
@@ -135,12 +145,27 @@ get_shard_replacements_int(UnusedShards, UsedShards) ->
     end, [], UsedShards).
 
 
--spec get_worker_ranges([{#shard{}, any()}]) -> [{integer(), integer()}].
-get_worker_ranges(Counters) ->
+-spec get_worker_ranges(fabric_dict()) -> [{integer(), integer()}].
+get_worker_ranges(Workers) ->
     Ranges = fabric_dict:fold(fun(#shard{range=[X, Y]}, _, Acc) ->
         [{X, Y} | Acc]
-    end, [], Counters),
+    end, [], Workers),
     lists:usort(Ranges).
+
+
+get_responses([], _) ->
+    [];
+
+get_responses([Range | Ranges], [{Range, Shard, Value} | Resps]) ->
+    [{Shard, Value} | get_responses(Ranges, Resps)];
+
+get_responses(Ranges, [_DupeRangeResp | Resps]) ->
+    get_responses(Ranges, Resps).
+
+
+stop_worker(#shard{ref = Ref, node = Node}) ->
+    rexi:kill(Node, Ref).
+
 
 % Unit tests
 
@@ -164,26 +189,6 @@ is_progress_possible_test() ->
     % not possible, overlap is not exact
     T7 = [[0, 10], [13, 20], [21, ?RING_END], [9, 12]],
     ?assertEqual(is_progress_possible(mk_cnts(T7)), false).
-
-
-remove_overlapping_shards_test() ->
-    Cb = undefined,
-
-    Shards = mk_cnts([[0, 10], [11, 20], [21, ?RING_END]], 3),
-
-    % Simple (exact) overlap
-    Shard1 = mk_shard("node-3", [11, 20]),
-    Shards1 = fabric_dict:store(Shard1, nil, Shards),
-    R1 = remove_overlapping_shards(Shard1, Shards1, Cb),
-    ?assertEqual([{0, 10}, {11, 20}, {21, ?RING_END}], get_worker_ranges(R1)),
-    ?assert(fabric_dict:is_key(Shard1, R1)),
-
-    % Split overlap (shard overlap multiple workers)
-    Shard2 = mk_shard("node-3", [0, 20]),
-    Shards2 = fabric_dict:store(Shard2, nil, Shards),
-    R2 = remove_overlapping_shards(Shard2, Shards2, Cb),
-    ?assertEqual([{0, 20}, {21, ?RING_END}], get_worker_ranges(R2)),
-    ?assert(fabric_dict:is_key(Shard2, R2)).
 
 
 get_shard_replacements_test() ->
@@ -210,21 +215,6 @@ get_shard_replacements_test() ->
 mk_cnts(Ranges) ->
     Shards = lists:map(fun mk_shard/1, Ranges),
     orddict:from_list([{Shard,nil} || Shard <- Shards]).
-
-mk_cnts(Ranges, NoNodes) ->
-    orddict:from_list([{Shard,nil}
-                       || Shard <-
-                              lists:flatten(lists:map(
-                                 fun(Range) ->
-                                         mk_shards(NoNodes,Range,[])
-                                 end, Ranges))]
-                     ).
-
-mk_shards(0,_Range,Shards) ->
-    Shards;
-mk_shards(NoNodes,Range,Shards) ->
-    Name ="node-" ++ integer_to_list(NoNodes),
-    mk_shards(NoNodes-1,Range, [mk_shard(Name, Range) | Shards]).
 
 
 mk_shard([B, E]) when is_integer(B), is_integer(E) ->
