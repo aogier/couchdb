@@ -81,7 +81,7 @@ handle_error(Shard, Workers, Responses) ->
 -spec handle_response(#shard{}, any(), fabric_dict(), fabric_dict()) ->
     {ok, {fabric_dict(), fabric_dict()}} | {stop, fabric_dict()}.
 handle_response(Shard, Response, Workers, Responses) ->
-    handle_response(Shard, Response, Workers, Responses, fun stop_worker/1).
+    handle_response(Shard, Response, Workers, Responses, fun stop_workers/1).
 
 
 -spec handle_response(#shard{}, any(), fabric_dict(), fabric_dict(), fun()) ->
@@ -95,20 +95,16 @@ handle_response(Shard, Response, Workers, Responses, CleanupCb) ->
         [] ->
             {ok, {Workers1, Responses1}};
         Ring ->
-            % Kill all the remaining workers since we have a full ring
-            lists:foreach(fun({W, _}) ->
-                case is_function(CleanupCb) of
-                    true -> CleanupCb(W);
-                    false -> ok
-                end
-            end, Workers1),
             % Return one response per range in the ring. The
             % response list is reversed before sorting so that the
             % first shard copy to reply is first. We use keysort
             % because it is documented as being stable so that
             % we keep the relative order of duplicate shards
             SortedResponses = lists:keysort(1, lists:reverse(Responses1)),
-            {stop, get_responses(Ring, SortedResponses)}
+            UsedResponses = get_responses(Ring, SortedResponses),
+            % Kill all the remaining workers as well as the redunant responses
+            stop_unused_workers(Workers1, Responses1, UsedResponses, CleanupCb),
+            {stop, UsedResponses}
     end.
 
 
@@ -163,8 +159,18 @@ get_responses(Ranges, [_DupeRangeResp | Resps]) ->
     get_responses(Ranges, Resps).
 
 
-stop_worker(#shard{ref = Ref, node = Node}) ->
-    rexi:kill(Node, Ref).
+stop_unused_workers(_, _, _, undefined) ->
+    ok;
+
+stop_unused_workers(Workers, AllResponses, UsedResponses, CleanupCb) ->
+    WorkerShards = [S || {S, _V} <- Workers],
+    Used  = [S || {S, _V} <- UsedResponses],
+    Unused = [S || {_R, S, _V} <- AllResponses, not lists:member(S, Used)],
+    CleanupCb(WorkerShards ++ Unused).
+
+
+stop_workers(Shards) when is_list(Shards) ->
+    rexi:kill_all([{Node, Ref} || #shard{node = Node, ref = Ref} <- Shards]).
 
 
 % Unit tests

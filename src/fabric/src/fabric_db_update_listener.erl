@@ -111,7 +111,7 @@ cleanup_monitor(Parent, Ref, Notifiers) ->
     end.
 
 stop_update_notifiers(Notifiers) ->
-    [rexi:kill(Node, Ref) || #worker{node=Node, ref=Ref} <- Notifiers].
+    rexi:kill_all([{N, Ref} || #worker{node = N, ref = Ref} <- Notifiers]).
 
 stop({Pid, Ref}) ->
     erlang:send(Pid, {Ref, done}).

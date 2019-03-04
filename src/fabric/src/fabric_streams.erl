@@ -204,7 +204,7 @@ should_clean_workers() ->
         Ref = erlang:monitor(process, Cleaner),
         Coord ! die,
         receive {'DOWN', Ref, _, Cleaner, _} -> ok end,
-        ?assertEqual(2, meck:num_calls(rexi, kill, 2))
+        ?assertEqual(1, meck:num_calls(rexi, kill_all, 1))
     end).
 
 
@@ -224,7 +224,7 @@ does_not_fire_if_cleanup_called() ->
         receive {'DOWN', Ref, _, _, _} -> ok end,
         % 2 calls would be from cleanup/1 function. If cleanup process fired
         % too it would have been 4 calls total.
-        ?assertEqual(2, meck:num_calls(rexi, kill, 2))
+        ?assertEqual(1, meck:num_calls(rexi, kill_all, 1))
     end).
 
 
@@ -241,12 +241,12 @@ should_clean_additional_worker_too() ->
         Ref = erlang:monitor(process, Cleaner),
         Coord ! die,
         receive {'DOWN', Ref, _, Cleaner, _} -> ok end,
-        ?assertEqual(2, meck:num_calls(rexi, kill, 2))
+        ?assertEqual(1, meck:num_calls(rexi, kill_all, 1))
     end).
 
 
 setup() ->
-    ok = meck:expect(rexi, kill, fun(_, _) -> ok end).
+    ok = meck:expect(rexi, kill_all, fun(_) -> ok end).
 
 
 teardown(_) ->

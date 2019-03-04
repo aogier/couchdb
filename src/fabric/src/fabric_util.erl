@@ -51,7 +51,7 @@ submit_jobs(Shards, Module, EndPoint, ExtraArgs) ->
     end, Shards).
 
 cleanup(Workers) ->
-    [rexi:kill(Node, Ref) || #shard{node=Node, ref=Ref} <- Workers].
+    rexi:kill_all([{Node, Ref} || #shard{node = Node, ref = Ref} <- Workers]).
 
 recv(Workers, Keypos, Fun, Acc0) ->
     rexi_utils:recv(Workers, Keypos, Fun, Acc0, request_timeout(), infinity).
