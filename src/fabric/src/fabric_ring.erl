@@ -212,6 +212,123 @@ get_shard_replacements_test() ->
     ?assertEqual(Expect, Res).
 
 
+handle_response_basic_test() ->
+    Shard1 = mk_shard("n1", [0, 1]),
+    Shard2 = mk_shard("n1", [2, ?RING_END]),
+
+    Workers1 = fabric_dict:init([Shard1, Shard2], nil),
+
+    Result1 = handle_response(Shard1, 42, Workers1, [], undefined),
+    ?assertMatch({ok, {_, _}}, Result1),
+    {ok, {Workers2, Responses1}} = Result1,
+    ?assertEqual(fabric_dict:erase(Shard1, Workers1), Workers2),
+    ?assertEqual([{{0, 1}, Shard1, 42}], Responses1),
+
+    Result2 = handle_response(Shard2, 43, Workers2, Responses1, undefined),
+    ?assertEqual({stop, [{Shard1, 42}, {Shard2, 43}]}, Result2).
+
+
+handle_response_test_multiple_copies_test() ->
+    Shard1 = mk_shard("n1", [0, 1]),
+    Shard2 = mk_shard("n2", [0, 1]),
+    Shard3 = mk_shard("n1", [2, ?RING_END]),
+
+    Workers1 = fabric_dict:init([Shard1, Shard2, Shard3], nil),
+
+    Result1 = handle_response(Shard1, 42, Workers1, [], undefined),
+    ?assertMatch({ok, {_, _}}, Result1),
+    {ok, {Workers2, Responses1}} = Result1,
+
+    Result2 = handle_response(Shard2, 43, Workers2, Responses1, undefined),
+    ?assertMatch({ok, {_, _}}, Result2),
+    {ok, {Workers3, Responses2}} = Result2,
+
+    Result3 = handle_response(Shard3, 44, Workers3, Responses2, undefined),
+    % Use the value (42) to distinguish between [0, 1] copies. In reality
+    % they should have the same value but here we need to assert that copy
+    % that responded first is included in the ring.
+    ?assertEqual({stop, [{Shard1, 42}, {Shard3, 44}]}, Result3).
+
+
+handle_response_test_backtracking_test() ->
+    Shard1 = mk_shard("n1", [0, 5]),
+    Shard2 = mk_shard("n1", [10, ?RING_END]),
+    Shard3 = mk_shard("n2", [2, ?RING_END]),
+    Shard4 = mk_shard("n3", [0, 1]),
+
+    Workers1 = fabric_dict:init([Shard1, Shard2, Shard3, Shard3], nil),
+
+    Result1 = handle_response(Shard1, 42, Workers1, [], undefined),
+    ?assertMatch({ok, {_, _}}, Result1),
+    {ok, {Workers2, Responses1}} = Result1,
+
+    Result2 = handle_response(Shard2, 43, Workers2, Responses1, undefined),
+    ?assertMatch({ok, {_, _}}, Result2),
+    {ok, {Workers3, Responses2}} = Result2,
+
+    Result3 = handle_response(Shard3, 44, Workers3, Responses2, undefined),
+    ?assertMatch({ok, {_, _}}, Result3),
+    {ok, {Workers4, Responses3}} = Result3,
+
+    Result4 = handle_response(Shard4, 45, Workers4, Responses3, undefined),
+    ?assertEqual({stop, [{Shard4, 45}, {Shard3, 44}]}, Result4).
+
+
+handle_error_test() ->
+    Shard1 = mk_shard("n1", [0, 5]),
+    Shard2 = mk_shard("n1", [10, ?RING_END]),
+    Shard3 = mk_shard("n2", [2, ?RING_END]),
+    Shard4 = mk_shard("n3", [0, 1]),
+
+    Workers1 = fabric_dict:init([Shard1, Shard2, Shard3, Shard4], nil),
+
+    Result1 = handle_response(Shard1, 42, Workers1, [], undefined),
+    ?assertMatch({ok, {_, _}}, Result1),
+    {ok, {Workers2, Responses1}} = Result1,
+
+    Result2 = handle_error(Shard2, Workers2, Responses1),
+    ?assertMatch({ok, _}, Result2),
+    {ok, Workers3} = Result2,
+    ?assertEqual(fabric_dict:erase(Shard2, Workers2), Workers3),
+
+    Result3 = handle_response(Shard3, 44, Workers3, Responses1, undefined),
+    ?assertMatch({ok, {_, _}}, Result3),
+    {ok, {Workers4, Responses3}} = Result3,
+
+    ?assertEqual(error, handle_error(Shard4, Workers4, Responses3)).
+
+
+node_down_test() ->
+    Shard1 = mk_shard("n1", [0, 5]),
+    Shard2 = mk_shard("n1", [10, ?RING_END]),
+    Shard3 = mk_shard("n2", [2, ?RING_END]),
+    Shard4 = mk_shard("n3", [0, 1]),
+
+    Workers1 = fabric_dict:init([Shard1, Shard2, Shard3, Shard4], nil),
+
+    Result1 = handle_response(Shard1, 42, Workers1, [], undefined),
+    ?assertMatch({ok, {_, _}}, Result1),
+    {ok, {Workers2, Responses1}} = Result1,
+
+    Result2 = handle_response(Shard2, 43, Workers2, Responses1, undefined),
+    ?assertMatch({ok, {_, _}}, Result2),
+    {ok, {Workers3, Responses2}} = Result2,
+
+    Result3 = node_down(n1, Workers3, Responses2),
+    ?assertMatch({ok, _}, Result3),
+    {ok, Workers4} = Result3,
+    ?assertEqual([{Shard3, nil}, {Shard4, nil}], Workers4),
+
+    Result4 = handle_response(Shard3, 44, Workers4, Responses2, undefined),
+    ?assertMatch({ok, {_, _}}, Result4),
+    {ok, {Workers5, Responses3}} = Result4,
+
+    % Note: Shard3 was already processed, it's ok if n2 went down after
+    ?assertEqual({ok, [{Shard4, nil}]}, node_down(n2, Workers5, Responses3)),
+
+    ?assertEqual(error, node_down(n3, Workers5, Responses3)).
+
+
 mk_cnts(Ranges) ->
     Shards = lists:map(fun mk_shard/1, Ranges),
     orddict:from_list([{Shard,nil} || Shard <- Shards]).
