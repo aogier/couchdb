@@ -91,7 +91,8 @@ handle_response(Shard, Response, Workers, Responses, CleanupCb) ->
     #shard{range = [B, E]} = Shard,
     Responses1 = [{{B, E}, Shard, Response} | Responses],
     ResponseRanges = lists:map(fun({R, _, _}) -> R end, Responses1),
-    case mem3_util:get_ring(ResponseRanges) of
+    {MinB, MaxE} = get_range_bounds(Workers, ResponseRanges),
+    case mem3_util:get_ring(ResponseRanges, MinB, MaxE) of
         [] ->
             {ok, {Workers1, Responses1}};
         Ring ->
@@ -114,7 +115,9 @@ handle_response(Shard, Response, Workers, Responses, CleanupCb) ->
     boolean().
 is_progress_possible(Counters, Responses) ->
     ResponseRanges = lists:map(fun({{B, E}, _, _}) -> {B, E} end, Responses),
-    mem3_util:get_ring(get_worker_ranges(Counters) ++ ResponseRanges) =/= [].
+    {MinB, MaxE} = get_range_bounds(Counters, ResponseRanges),
+    Ranges = get_worker_ranges(Counters) ++ ResponseRanges,
+    mem3_util:get_ring(Ranges, MinB, MaxE) =/= [].
 
 
 get_shard_replacements_int(UnusedShards, UsedShards) ->
@@ -147,6 +150,12 @@ get_worker_ranges(Workers) ->
         [{X, Y} | Acc]
     end, [], Workers),
     lists:usort(Ranges).
+
+
+get_range_bounds(Workers, ResponseRanges) ->
+    Ranges = get_worker_ranges(Workers) ++ ResponseRanges,
+    {Bs, Es} = lists:unzip(Ranges),
+    {lists:min(Bs), lists:max(Es)}.
 
 
 get_responses([], _) ->
@@ -221,6 +230,22 @@ get_shard_replacements_test() ->
 handle_response_basic_test() ->
     Shard1 = mk_shard("n1", [0, 1]),
     Shard2 = mk_shard("n1", [2, ?RING_END]),
+
+    Workers1 = fabric_dict:init([Shard1, Shard2], nil),
+
+    Result1 = handle_response(Shard1, 42, Workers1, [], undefined),
+    ?assertMatch({ok, {_, _}}, Result1),
+    {ok, {Workers2, Responses1}} = Result1,
+    ?assertEqual(fabric_dict:erase(Shard1, Workers1), Workers2),
+    ?assertEqual([{{0, 1}, Shard1, 42}], Responses1),
+
+    Result2 = handle_response(Shard2, 43, Workers2, Responses1, undefined),
+    ?assertEqual({stop, [{Shard1, 42}, {Shard2, 43}]}, Result2).
+
+
+handle_response_incomplete_ring_test() ->
+    Shard1 = mk_shard("n1", [0, 1]),
+    Shard2 = mk_shard("n1", [2, 10]),
 
     Workers1 = fabric_dict:init([Shard1, Shard2], nil),
 
